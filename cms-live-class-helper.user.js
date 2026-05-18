@@ -1,14 +1,18 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.0
+// @version      4.2
 // @description  Improve CMS live class table and validate schedule inside Add/Edit form instantly
-// @match        https://cms.shikho.com/live-classes-academic/*
+// @match        https://cms.shikho.com/*
 // @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  function isLiveClassPage() {
+    return window.location.pathname.includes('/live-classes-academic');
+  }
 
   function cleanText(value) {
     return (value || '').replace(/\s+/g, ' ').trim();
@@ -151,7 +155,10 @@
 
     const currentText = cleanText(cell.innerText);
 
-    if (!cell.dataset.sourceText || /(\d{1,2}:\d{2}\s?(AM|PM))\s+(\d{2}-\d{2}-\d{4})/i.test(currentText)) {
+    if (
+      !cell.dataset.sourceText ||
+      /(\d{1,2}:\d{2}\s?(AM|PM))\s+(\d{2}-\d{2}-\d{4})/i.test(currentText)
+    ) {
       cell.dataset.sourceText = currentText;
     }
 
@@ -222,7 +229,7 @@
     }
 
     if (type === 'subject') {
-      const lines = cell.innerText
+      const lines = sourceText
         .split('\n')
         .map(line => cleanText(line))
         .filter(Boolean);
@@ -294,6 +301,8 @@
   }
 
   function improveOriginalTable() {
+    if (!isLiveClassPage()) return;
+
     const tableWrapper = document.querySelector('.ant-table-wrapper');
     const tableBody = document.querySelector('.ant-table-tbody');
 
@@ -448,7 +457,10 @@
   }
 
   function validateLiveClassForm() {
+    if (!isLiveClassPage()) return true;
+
     const drawerOrModal = document.querySelector('.ant-drawer-content, .ant-modal-content');
+
     if (!drawerOrModal) {
       removeFormWarning();
       return true;
@@ -529,11 +541,25 @@
     formTimer = setTimeout(validateLiveClassForm, delay);
   }
 
-  setTimeout(improveOriginalTable, 1000);
-  setInterval(improveOriginalTable, 2500);
-  setInterval(validateLiveClassForm, 500);
+  function runCmsHelper() {
+    if (!isLiveClassPage()) return;
 
+    improveOriginalTable();
+    validateLiveClassForm();
+  }
+
+  // Initial run
+  setTimeout(runCmsHelper, 800);
+  setTimeout(runCmsHelper, 1500);
+  setTimeout(runCmsHelper, 2500);
+
+  // Continuous check so it works after SPA/internal navigation
+  setInterval(runCmsHelper, 1000);
+
+  // Watch DOM updates
   const observer = new MutationObserver(() => {
+    if (!isLiveClassPage()) return;
+
     refreshTable(300);
     refreshFormValidation(150);
   });
@@ -548,20 +574,24 @@
     });
   }, 1500);
 
+  // Watch input changes inside edit/add form
   document.addEventListener('input', function () {
+    if (!isLiveClassPage()) return;
     refreshFormValidation(50);
   }, true);
 
   document.addEventListener('change', function () {
+    if (!isLiveClassPage()) return;
     refreshFormValidation(50);
   }, true);
 
   document.addEventListener('click', function (event) {
-    const button = event.target.closest('button');
+    if (!isLiveClassPage()) return;
 
     setTimeout(validateLiveClassForm, 100);
     setTimeout(validateLiveClassForm, 300);
 
+    const button = event.target.closest('button');
     if (!button) return;
 
     const text = cleanText(button.innerText).toLowerCase();
@@ -579,4 +609,22 @@
       setTimeout(refreshTable, 2500);
     }
   }, true);
+
+  // Detect internal route changes in CMS SPA
+  let lastUrl = location.href;
+
+  function watchRouteChange() {
+    const currentUrl = location.href;
+
+    if (currentUrl !== lastUrl) {
+      lastUrl = currentUrl;
+
+      setTimeout(runCmsHelper, 500);
+      setTimeout(runCmsHelper, 1000);
+      setTimeout(runCmsHelper, 2000);
+      setTimeout(runCmsHelper, 3000);
+    }
+  }
+
+  setInterval(watchRouteChange, 500);
 })();
