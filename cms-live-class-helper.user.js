@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.2
+// @version      4.3
 // @description  Improve CMS live class table and validate schedule inside Add/Edit form instantly
 // @match        https://cms.shikho.com/*
 // @grant        none
@@ -206,59 +206,73 @@
   }
 
   function styleTextCell(cell, type) {
-    if (!cell) return;
+  if (!cell) return;
 
-    const sourceText = cleanText(cell.innerText);
+  // Important:
+  // For subject & chapter, do NOT use cleanText first,
+  // because cleanText removes line breaks.
+  const rawText = cell.dataset.originalRawText || cell.innerText || '';
 
-    if (cell.dataset.renderedText === sourceText) return;
+  if (!cell.dataset.originalRawText) {
+    cell.dataset.originalRawText = rawText;
+  }
 
-    cell.dataset.renderedText = sourceText;
+  const sourceText = type === 'subject'
+    ? cell.dataset.originalRawText
+    : cleanText(cell.dataset.originalRawText);
 
-    if (type === 'title') {
-      cell.innerHTML = `
+  if (cell.dataset.renderedText === sourceText) return;
+
+  cell.dataset.renderedText = sourceText;
+
+  if (type === 'title') {
+    cell.innerHTML = `
+      <div style="
+        font-size:17px;
+        font-weight:800;
+        color:#222;
+        line-height:1.4;
+        max-width:260px;
+      ">
+        ${cleanText(sourceText) || '-'}
+      </div>
+    `;
+  }
+
+  if (type === 'subject') {
+    const lines = sourceText
+      .split(/\n+/)
+      .map(line => cleanText(line))
+      .filter(Boolean);
+
+    const subject = lines[0] || '-';
+    const chapter = lines.slice(1).join('<br>') || '-';
+
+    cell.innerHTML = `
+      <div style="
+        line-height:1.5;
+        max-width:360px;
+      ">
         <div style="
-          font-size:17px;
+          font-size:15px;
           font-weight:800;
           color:#222;
-          line-height:1.4;
-          max-width:260px;
+          margin-bottom:6px;
         ">
-          ${sourceText || '-'}
+          ${subject}
         </div>
-      `;
-    }
 
-    if (type === 'subject') {
-      const lines = sourceText
-        .split('\n')
-        .map(line => cleanText(line))
-        .filter(Boolean);
-
-      cell.innerHTML = `
         <div style="
-          line-height:1.5;
-          max-width:360px;
+          font-size:13px;
+          color:#555;
+          font-weight:700;
         ">
-          <div style="
-            font-size:15px;
-            font-weight:800;
-            color:#222;
-            margin-bottom:4px;
-          ">
-            ${lines[0] || '-'}
-          </div>
-
-          <div style="
-            font-size:13px;
-            color:#555;
-            font-weight:600;
-          ">
-            ${lines.slice(1).join('<br>') || ''}
-          </div>
+          ${chapter}
         </div>
-      `;
-    }
+      </div>
+    `;
   }
+}
 
   function clearRowWarnings(row) {
     if (!row) return;
