@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Shikho CQ Pending Auto Scanner Dashboard
 // @namespace    https://cqchecker.shikho.com/
-// @version      3.0.7
+// @version      3.0.8
 // @description  Auto-scan CQ exams and show pending answer scripts without manually clicking every question
 // @author       Raisul Islam
 // @match        *://cqchecker.shikho.com/*
