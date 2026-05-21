@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Shikho CQ Pending Auto Scanner Dashboard
 // @namespace    https://cqchecker.shikho.com/
-// @version      3.0.6
+// @version      3.0.7
 // @description  Auto-scan CQ exams and show pending answer scripts without manually clicking every question
 // @author       Raisul Islam
 // @match        *://cqchecker.shikho.com/*
@@ -560,177 +560,190 @@
    * MAIN SCAN
    ************************************************************/
   async function scanPending() {
-    stopScan = false;
+  console.log("[CQ Auto Scanner] scanPending started");
 
-    const resultBox = document.querySelector("#cq-auto-results");
-    if (!resultBox) return;
+  stopScan = false;
 
-    const pendingExams = rows.filter((row) => row.totalPending > 0).length;
-    const errorCount = rows.reduce(
-      (sum, row) => sum + row.questionRows.filter((q) => q.type === "error").length,
-      0
-    );
-    
-    latestScanRows = rows;
-    latestScanSummary = {
-      totalPending,
-      scannedQuestions,
-      pendingExams,
-      errorCount,
-      generatedAt: new Date().toLocaleString(),
-    };
+  const resultBox = document.querySelector("#cq-auto-results");
+  if (!resultBox) return;
 
-    resultBox.innerHTML = `<div class="cq-auto-empty">Starting scan...</div>`;
+  resultBox.innerHTML = `<div class="cq-auto-empty">Starting scan...</div>`;
 
-    let exams = readStore(STORAGE.exams, []);
+  let exams = readStore(STORAGE.exams, []);
 
-    const scope = document.querySelector("#cq-auto-scope")?.value || "HSC";
-    localStorage.setItem(STORAGE.scope, scope);
+  const scope = document.querySelector("#cq-auto-scope")?.value || "HSC";
+  localStorage.setItem(STORAGE.scope, scope);
 
-    if (!exams.length) {
-      exams = await discoverExams();
+  if (!exams.length) {
+    exams = await discoverExams();
+  }
+
+  const scopedExams =
+    scope === "ALL"
+      ? exams
+      : exams.filter((exam) => exam.subject_parent_code === scope || exam.class === scope);
+
+  if (!scopedExams.length) {
+    resultBox.innerHTML = `<div class="cq-auto-empty">No discovered CQ exam found for ${escapeHtml(scope)}.</div>`;
+    setStatus("No exam found.");
+    return;
+  }
+
+  const scanLimitValue = Number(document.querySelector("#cq-auto-limit")?.value || 0);
+  const examsToScan = scanLimitValue > 0 ? scopedExams.slice(0, scanLimitValue) : scopedExams;
+
+  // THESE MUST BE HERE — INSIDE scanPending()
+  let rows = [];
+  let totalPending = 0;
+  let scannedQuestions = 0;
+
+  setProgress(0, examsToScan.length);
+
+  for (let examIndex = 0; examIndex < examsToScan.length; examIndex++) {
+    if (stopScan) {
+      setStatus("Scan stopped.");
+      break;
     }
 
-    const scopedExams =
-      scope === "ALL"
-        ? exams
-        : exams.filter((exam) => exam.subject_parent_code === scope || exam.class === scope);
+    let exam = examsToScan[examIndex];
 
-    if (!scopedExams.length) {
-      resultBox.innerHTML = `<div class="cq-auto-empty">No discovered CQ exam found for ${escapeHtml(scope)}.</div>`;
-      setStatus("No exam found.");
-      return;
-    }
+    setStatus(`Scanning exam ${examIndex + 1}/${examsToScan.length}: ${exam.model_test_title}`);
 
-    const scanLimitValue = Number(document.querySelector("#cq-auto-limit")?.value || 0);
-    const examsToScan = scanLimitValue > 0 ? scopedExams.slice(0, scanLimitValue) : scopedExams;
+    exam = await getExamDetails(exam);
 
-    let rows = [];
-    let totalPending = 0;
-    let scannedQuestions = 0;
+    const setIds = setLetters(exam.no_of_sets || 1);
+    let examTotalPending = 0;
+    let examQuestionRows = [];
 
-    setProgress(0, examsToScan.length);
+    for (const setId of setIds) {
+      if (stopScan) break;
 
-    for (let examIndex = 0; examIndex < examsToScan.length; examIndex++) {
-      if (stopScan) {
-        setStatus("Scan stopped.");
-        break;
+      let questions = [];
+
+      try {
+        questions = await getQuestionsForExamSet(exam, setId);
+      } catch (error) {
+        examQuestionRows.push({
+          type: "error",
+          message: `Question list failed for Set ${setId}: ${error.message}`,
+        });
+        continue;
       }
 
-      let exam = examsToScan[examIndex];
-
-      setStatus(`Scanning exam ${examIndex + 1}/${examsToScan.length}: ${exam.model_test_title}`);
-
-      exam = await getExamDetails(exam);
-
-      const setIds = setLetters(exam.no_of_sets || 1);
-      let examTotalPending = 0;
-      let examQuestionRows = [];
-
-      for (const setId of setIds) {
+      for (const question of questions) {
         if (stopScan) break;
 
-        let questions = [];
-
         try {
-          questions = await getQuestionsForExamSet(exam, setId);
+          const count = await getPendingCount({ exam, setId, question });
+
+          scannedQuestions++;
+          examTotalPending += count;
+          totalPending += count;
+
+          examQuestionRows.push({
+            type: "question",
+            setId,
+            question,
+            count,
+          });
         } catch (error) {
           examQuestionRows.push({
             type: "error",
-            message: `Question list failed for Set ${setId}: ${error.message}`,
+            setId,
+            question,
+            message: error.message,
           });
-          continue;
         }
 
-        for (const question of questions) {
-          if (stopScan) break;
+        setStatus(
+          `Scanning: ${examIndex + 1}/${examsToScan.length} exams • ${scannedQuestions} questions checked`
+        );
 
-          try {
-            const count = await getPendingCount({ exam, setId, question });
-            scannedQuestions++;
-            examTotalPending += count;
-            totalPending += count;
-
-            examQuestionRows.push({
-              type: "question",
-              setId,
-              question,
-              count,
-            });
-          } catch (error) {
-            examQuestionRows.push({
-              type: "error",
-              setId,
-              question,
-              message: error.message,
-            });
-          }
-
-          setStatus(
-            `Scanning: ${examIndex + 1}/${examsToScan.length} exams • ${scannedQuestions} questions checked`
-          );
-
-          await sleep(90);
-        }
-
-        await sleep(120);
+        await sleep(90);
       }
 
-      rows.push({
-        exam,
-        totalPending: examTotalPending,
-        questionRows: examQuestionRows,
-      });
-
-      setProgress(examIndex + 1, examsToScan.length);
-      renderResults(rows, totalPending, scannedQuestions);
-      await sleep(150);
+      await sleep(120);
     }
 
+    rows.push({
+      exam,
+      totalPending: examTotalPending,
+      questionRows: examQuestionRows,
+    });
+
+    setProgress(examIndex + 1, examsToScan.length);
     renderResults(rows, totalPending, scannedQuestions);
-    setStatus(
-      stopScan
-        ? `Scan stopped. Pending found: ${totalPending}`
-        : `Scan completed. Pending found: ${totalPending}`
-    );
+
+    await sleep(150);
   }
 
-  function renderResults(rows, totalPending, scannedQuestions) {
-    const resultBox = document.querySelector("#cq-auto-results");
-    if (!resultBox) return;
+  renderResults(rows, totalPending, scannedQuestions);
 
-    const hideZero = localStorage.getItem(STORAGE.hideZero) !== "false";
+  setStatus(
+    stopScan
+      ? `Scan stopped. Pending found: ${totalPending}`
+      : `Scan completed. Pending found: ${totalPending}`
+  );
+}
 
-    const visibleRows = hideZero
-      ? rows.filter((row) => row.totalPending > 0 || row.questionRows.some((q) => q.type === "error"))
-      : rows;
+ function renderResults(rows, totalPending, scannedQuestions) {
+  const resultBox = document.querySelector("#cq-auto-results");
+  if (!resultBox) return;
 
-   
-    const summaryHtml = `
-      <div class="cq-auto-summary">
-        <div><span>Total Pending</span><strong>${totalPending}</strong></div>
-        <div><span>Pending Exams</span><strong>${pendingExams}</strong></div>
-        <div><span>Questions Checked</span><strong>${scannedQuestions}</strong></div>
-        <div><span>Errors</span><strong>${errorCount}</strong></div>
-      </div>
-    `;
+  const safeRows = Array.isArray(rows) ? rows : [];
 
-    if (!visibleRows.length) {
-      resultBox.innerHTML =
-        summaryHtml +
-        `<div class="cq-auto-good">No pending scripts found in scanned exams.</div>`;
-      return;
-    }
+  const pendingExams = safeRows.filter((row) => row.totalPending > 0).length;
 
+  const errorCount = safeRows.reduce(
+    (sum, row) =>
+      sum + row.questionRows.filter((q) => q.type === "error").length,
+    0
+  );
+
+  latestScanRows = safeRows;
+  latestScanSummary = {
+    totalPending,
+    scannedQuestions,
+    pendingExams,
+    errorCount,
+    generatedAt: new Date().toLocaleString(),
+  };
+
+  const hideZero = localStorage.getItem(STORAGE.hideZero) !== "false";
+
+  const visibleRows = hideZero
+    ? safeRows.filter(
+        (row) =>
+          row.totalPending > 0 ||
+          row.questionRows.some((q) => q.type === "error")
+      )
+    : safeRows;
+
+  const summaryHtml = `
+    <div class="cq-auto-summary">
+      <div><span>Total Pending</span><strong>${totalPending}</strong></div>
+      <div><span>Pending Exams</span><strong>${pendingExams}</strong></div>
+      <div><span>Questions Checked</span><strong>${scannedQuestions}</strong></div>
+      <div><span>Errors</span><strong>${errorCount}</strong></div>
+    </div>
+  `;
+
+  if (!visibleRows.length) {
     resultBox.innerHTML =
       summaryHtml +
-      visibleRows
-        .sort((a, b) => b.totalPending - a.totalPending)
-        .map((row, index) => examRowHtml(row, index))
-        .join("");
-
-    bindResultButtons();
+      `<div class="cq-auto-good">No pending scripts found in scanned exams.</div>`;
+    return;
   }
+
+  resultBox.innerHTML =
+    summaryHtml +
+    visibleRows
+      .sort((a, b) => b.totalPending - a.totalPending)
+      .map((row, index) => examRowHtml(row, index))
+      .join("");
+
+  bindResultButtons();
+}
 
   function examRowHtml(row, index) {
     const { exam, totalPending, questionRows } = row;
@@ -1567,7 +1580,7 @@ const questionCacheCount = Object.values(safeQuestionCache).reduce(
           <button class="cq-auto-btn cq-auto-primary" id="cq-auto-scan">Scan Pending</button>
           <button class="cq-auto-btn cq-auto-secondary" id="cq-auto-discover">Discover Exams</button>
           <button class="cq-auto-btn cq-auto-secondary" id="cq-auto-subjects">Reload Subjects</button>
-          <button class="cq-auto-btn cq-auto-secondary" id="cq-auto-export">Export Result CSV</button>
+          <button class="cq-auto-btn cq-auto-secondary" id="cq-auto-export">Export XLSX</button>
           <button class="cq-auto-btn cq-auto-danger" id="cq-auto-stop">Stop Scan</button>
           <button class="cq-auto-btn cq-auto-danger" id="cq-auto-clear">Clear Cache</button>
         </div>
@@ -1590,7 +1603,17 @@ const questionCacheCount = Object.values(safeQuestionCache).reduce(
       </div>
     `;
 
-    document.querySelector("#cq-auto-scan")?.addEventListener("click", scanPending);
+    document.querySelector("#cq-auto-scan")?.addEventListener("click", async () => {
+  try {
+    console.log("[CQ Auto Scanner] Scan Pending clicked");
+    setStatus("Scan button clicked. Starting scan...");
+    await scanPending();
+  } catch (error) {
+    console.error("[CQ Auto Scanner] Scan failed:", error);
+    setStatus(`Scan failed: ${error.message}`);
+    alert(`Scan failed: ${error.message}`);
+  }
+});
     document.querySelector("#cq-auto-discover")?.addEventListener("click", discoverExams);
     document.querySelector("#cq-auto-subjects")?.addEventListener("click", loadSubjects);
     document.querySelector("#cq-auto-stop")?.addEventListener("click", stopCurrentScan);
