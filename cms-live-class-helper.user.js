@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.9
+// @version      4.10
 // @description  Improve CMS live class table, auto-update edited time, show teacher, and validate schedule
 // @match        https://cms.shikho.com/*
 // @updateURL    https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cms-live-class-helper.user.js
@@ -13,6 +13,18 @@
   'use strict';
 
   let activeEditRow = null;
+
+  window.fetch = async function (...args) {
+  const response = await originalFetch.apply(this, args);
+  const clonedResponse = response.clone();
+
+  clonedResponse.json().then(data => {
+    // read live class list response
+    // save id, title, subject, start_time, end_time
+  });
+
+  return response;
+};
 
   function isLiveClassPage() {
     return window.location.pathname.includes('/live-classes-academic');
