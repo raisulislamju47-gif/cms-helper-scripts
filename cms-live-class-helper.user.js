@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.8
+// @version      4.9
 // @description  Improve CMS live class table, auto-update edited time, show teacher, and validate schedule
 // @match        https://cms.shikho.com/*
 // @updateURL    https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cms-live-class-helper.user.js
