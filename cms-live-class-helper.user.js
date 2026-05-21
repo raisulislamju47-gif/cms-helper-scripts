@@ -1,14 +1,18 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.3
-// @description  Improve CMS live class table and validate schedule inside Add/Edit form instantly
+// @version      4.4
+// @description  Improve CMS live class table, auto-update edited time, show teacher, and validate schedule
 // @match        https://cms.shikho.com/*
+// @updateURL    https://raw.githubusercontent.com/raisulislamju47/cms-helper-scripts/main/cms-live-class-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/raisulislamju47/cms-helper-scripts/main/cms-live-class-helper.user.js
 // @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  let activeEditRow = null;
 
   function isLiveClassPage() {
     return window.location.pathname.includes('/live-classes-academic');
@@ -16,6 +20,10 @@
 
   function cleanText(value) {
     return (value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, '0');
   }
 
   function formatDate(dateText) {
@@ -75,8 +83,6 @@
   function parseCmsTableDateTime(value) {
     const cleaned = cleanText(value);
 
-    // Table format example:
-    // 05:00 PM 16-05-2026
     const match = cleaned.match(/(\d{1,2}:\d{2}\s?(AM|PM))\s+(\d{2}-\d{2}-\d{4})/i);
 
     if (!match) {
@@ -102,8 +108,6 @@
   function parseFormDateTime(value) {
     const cleaned = cleanText(value);
 
-    // Form format example:
-    // 2026-05-16 17:00:00
     const match = cleaned.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
 
     if (!match) return null;
@@ -116,6 +120,23 @@
     const second = Number(match[6] || 0);
 
     return new Date(year, month, day, hour, minute, second);
+  }
+
+  function formDateTimeToCmsText(value) {
+    const dateObj = parseFormDateTime(value);
+    if (!dateObj) return '';
+
+    let hour = dateObj.getHours();
+    const minute = dateObj.getMinutes();
+
+    const period = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+
+    const timeText = `${pad2(hour)}:${pad2(minute)} ${period}`;
+    const dateText = `${pad2(dateObj.getDate())}-${pad2(dateObj.getMonth() + 1)}-${dateObj.getFullYear()}`;
+
+    return `${timeText} ${dateText}`;
   }
 
   function formatFormDateTimeForMessage(dateObj) {
@@ -144,6 +165,7 @@
       if (text.includes('class ongoing')) indexes.classOngoing = index;
       if (text.includes('start time')) indexes.startTime = index;
       if (text.includes('end time')) indexes.endTime = index;
+      if (text.includes('teacher') || text.includes('mentor')) indexes.teacher = index;
       if (text.includes('actions')) indexes.actions = index;
     });
 
@@ -175,30 +197,15 @@
         background:${bgColor};
         min-width:180px;
       ">
-        <div style="
-          font-size:12px;
-          color:#555;
-          margin-bottom:4px;
-          font-weight:600;
-        ">
+        <div style="font-size:12px; color:#555; margin-bottom:4px; font-weight:600;">
           ${label}
         </div>
 
-        <div style="
-          font-size:20px;
-          font-weight:800;
-          color:${color};
-          line-height:1.2;
-        ">
+        <div style="font-size:20px; font-weight:800; color:${color}; line-height:1.2;">
           ${data.time}
         </div>
 
-        <div style="
-          font-size:12px;
-          color:#333;
-          margin-top:5px;
-          font-weight:600;
-        ">
+        <div style="font-size:12px; color:#333; margin-top:5px; font-weight:600;">
           ${data.date}
         </div>
       </div>
@@ -206,73 +213,103 @@
   }
 
   function styleTextCell(cell, type) {
-  if (!cell) return;
+    if (!cell) return;
 
-  // Important:
-  // For subject & chapter, do NOT use cleanText first,
-  // because cleanText removes line breaks.
-  const rawText = cell.dataset.originalRawText || cell.innerText || '';
+    const rawText = cell.dataset.originalRawText || cell.innerText || '';
 
-  if (!cell.dataset.originalRawText) {
-    cell.dataset.originalRawText = rawText;
-  }
+    if (!cell.dataset.originalRawText) {
+      cell.dataset.originalRawText = rawText;
+    }
 
-  const sourceText = type === 'subject'
-    ? cell.dataset.originalRawText
-    : cleanText(cell.dataset.originalRawText);
+    const sourceText = type === 'subject'
+      ? cell.dataset.originalRawText
+      : cleanText(cell.dataset.originalRawText);
 
-  if (cell.dataset.renderedText === sourceText) return;
+    if (cell.dataset.renderedText === sourceText) return;
 
-  cell.dataset.renderedText = sourceText;
+    cell.dataset.renderedText = sourceText;
 
-  if (type === 'title') {
-    cell.innerHTML = `
-      <div style="
-        font-size:17px;
-        font-weight:800;
-        color:#222;
-        line-height:1.4;
-        max-width:260px;
-      ">
-        ${cleanText(sourceText) || '-'}
-      </div>
-    `;
-  }
-
-  if (type === 'subject') {
-    const lines = sourceText
-      .split(/\n+/)
-      .map(line => cleanText(line))
-      .filter(Boolean);
-
-    const subject = lines[0] || '-';
-    const chapter = lines.slice(1).join('<br>') || '-';
-
-    cell.innerHTML = `
-      <div style="
-        line-height:1.5;
-        max-width:360px;
-      ">
+    if (type === 'title') {
+      cell.innerHTML = `
         <div style="
-          font-size:15px;
+          font-size:17px;
           font-weight:800;
           color:#222;
-          margin-bottom:6px;
+          line-height:1.4;
+          max-width:260px;
         ">
-          ${subject}
+          ${cleanText(sourceText) || '-'}
+        </div>
+      `;
+    }
+
+    if (type === 'subject') {
+      const lines = sourceText
+        .split(/\n+/)
+        .map(line => cleanText(line))
+        .filter(Boolean);
+
+      const subject = lines[0] || '-';
+      const chapter = lines.slice(1).join('<br>') || '-';
+
+      cell.innerHTML = `
+        <div style="line-height:1.5; max-width:360px;">
+          <div style="
+            font-size:15px;
+            font-weight:800;
+            color:#222;
+            margin-bottom:6px;
+          ">
+            ${subject}
+          </div>
+
+          <div style="
+            font-size:13px;
+            color:#555;
+            font-weight:700;
+          ">
+            ${chapter}
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  function styleClassOngoingCell(cell, classOngoingText, teacherName) {
+    if (!cell) return;
+
+    const sourceKey = `${classOngoingText}__${teacherName}`;
+
+    if (cell.dataset.renderedSource === sourceKey) return;
+
+    cell.dataset.renderedSource = sourceKey;
+
+    cell.innerHTML = `
+      <div style="line-height:1.5;">
+        <div style="
+          font-size:14px;
+          font-weight:800;
+          color:#222;
+        ">
+          ${classOngoingText || '-'}
         </div>
 
         <div style="
-          font-size:13px;
-          color:#555;
+          margin-top:6px;
+          padding:6px 8px;
+          background:#f6f7fb;
+          border:1px solid #e5e7eb;
+          border-radius:8px;
+          display:inline-block;
+          font-size:12px;
           font-weight:700;
+          color:#354894;
         ">
-          ${chapter}
+          Teacher: ${teacherName || '-'}
         </div>
       </div>
     `;
   }
-}
 
   function clearRowWarnings(row) {
     if (!row) return;
@@ -314,6 +351,14 @@
     targetCell.appendChild(warning);
   }
 
+  function getTeacherNameFromRow(cells, indexes) {
+    if (indexes.teacher !== undefined && cells[indexes.teacher]) {
+      return cleanText(cells[indexes.teacher].dataset.originalRawText || cells[indexes.teacher].innerText);
+    }
+
+    return '-';
+  }
+
   function improveOriginalTable() {
     if (!isLiveClassPage()) return;
 
@@ -327,6 +372,7 @@
     if (
       indexes.title === undefined ||
       indexes.subjectChapter === undefined ||
+      indexes.classOngoing === undefined ||
       indexes.startTime === undefined ||
       indexes.endTime === undefined
     ) {
@@ -341,6 +387,7 @@
 
       const titleCell = cells[indexes.title];
       const subjectCell = cells[indexes.subjectChapter];
+      const classOngoingCell = cells[indexes.classOngoing];
       const startCell = cells[indexes.startTime];
       const endCell = cells[indexes.endTime];
 
@@ -354,8 +401,19 @@
       const startData = parseCmsTableDateTime(startSourceText);
       const endData = parseCmsTableDateTime(endSourceText);
 
+      const classOngoingText =
+        classOngoingCell.dataset.originalClassOngoingText ||
+        cleanText(classOngoingCell.innerText);
+
+      if (!classOngoingCell.dataset.originalClassOngoingText) {
+        classOngoingCell.dataset.originalClassOngoingText = classOngoingText;
+      }
+
+      const teacherName = getTeacherNameFromRow(cells, indexes);
+
       styleTextCell(titleCell, 'title');
       styleTextCell(subjectCell, 'subject');
+      styleClassOngoingCell(classOngoingCell, classOngoingText, teacherName);
 
       styleTimeCell(startCell, 'Start', startData, '#354894', '#eef3ff');
       styleTimeCell(endCell, 'End', endData, '#CF278D', '#fff0f7');
@@ -366,12 +424,7 @@
         startData.rawDate === endData.rawDate &&
         startData.time === endData.time
       ) {
-        addRowWarning(
-          row,
-          endCell,
-          'Start time and end time are the same.',
-          'warning'
-        );
+        addRowWarning(row, endCell, 'Start time and end time are the same.', 'warning');
       }
 
       if (
@@ -379,12 +432,7 @@
         endData.rawDate !== '-' &&
         startData.rawDate !== endData.rawDate
       ) {
-        addRowWarning(
-          row,
-          endCell,
-          'Start date and end date are different. Please verify if this is intentional.',
-          'warning'
-        );
+        addRowWarning(row, endCell, 'Start date and end date are different. Please verify if this is intentional.', 'warning');
       }
 
       if (
@@ -392,12 +440,7 @@
         endData.dateTime &&
         endData.dateTime < startData.dateTime
       ) {
-        addRowWarning(
-          row,
-          endCell,
-          'Invalid schedule: This class ends before it starts. Please recheck both date and time.',
-          'danger'
-        );
+        addRowWarning(row, endCell, 'Invalid schedule: This class ends before it starts. Please recheck both date and time.', 'danger');
 
         row.style.background = '#fff5f5';
         row.style.outline = '2px solid #ff4d4f';
@@ -543,6 +586,48 @@
     return true;
   }
 
+  function updateActiveRowFromForm() {
+    if (!activeEditRow) return;
+
+    const startItem = findFormItemByLabel('start time');
+    const endItem = findFormItemByLabel('end time');
+
+    const startValue = getInputValueFromFormItem(startItem);
+    const endValue = getInputValueFromFormItem(endItem);
+
+    const startCmsText = formDateTimeToCmsText(startValue);
+    const endCmsText = formDateTimeToCmsText(endValue);
+
+    if (!startCmsText || !endCmsText) return;
+
+    const indexes = getColumnIndexes();
+    const cells = Array.from(activeEditRow.querySelectorAll('td'));
+
+    const startCell = cells[indexes.startTime];
+    const endCell = cells[indexes.endTime];
+
+    if (startCell) {
+      startCell.dataset.sourceText = startCmsText;
+      startCell.dataset.renderedSource = '';
+    }
+
+    if (endCell) {
+      endCell.dataset.sourceText = endCmsText;
+      endCell.dataset.renderedSource = '';
+    }
+
+    setTimeout(improveOriginalTable, 100);
+    setTimeout(improveOriginalTable, 500);
+    setTimeout(improveOriginalTable, 1200);
+  }
+
+  function runCmsHelper() {
+    if (!isLiveClassPage()) return;
+
+    improveOriginalTable();
+    validateLiveClassForm();
+  }
+
   let tableTimer;
   function refreshTable(delay = 300) {
     clearTimeout(tableTimer);
@@ -555,22 +640,12 @@
     formTimer = setTimeout(validateLiveClassForm, delay);
   }
 
-  function runCmsHelper() {
-    if (!isLiveClassPage()) return;
-
-    improveOriginalTable();
-    validateLiveClassForm();
-  }
-
-  // Initial run
   setTimeout(runCmsHelper, 800);
   setTimeout(runCmsHelper, 1500);
   setTimeout(runCmsHelper, 2500);
 
-  // Continuous check so it works after SPA/internal navigation
   setInterval(runCmsHelper, 1000);
 
-  // Watch DOM updates
   const observer = new MutationObserver(() => {
     if (!isLiveClassPage()) return;
 
@@ -588,7 +663,6 @@
     });
   }, 1500);
 
-  // Watch input changes inside edit/add form
   document.addEventListener('input', function () {
     if (!isLiveClassPage()) return;
     refreshFormValidation(50);
@@ -601,6 +675,23 @@
 
   document.addEventListener('click', function (event) {
     if (!isLiveClassPage()) return;
+
+    const clickedRow = event.target.closest('tr.ant-table-row');
+    const clickedButtonOrIcon = event.target.closest('button, a, span, svg');
+
+    if (clickedRow && clickedButtonOrIcon) {
+      const rowText = cleanText(clickedRow.innerText).toLowerCase();
+      const clickedText = cleanText(clickedButtonOrIcon.innerText).toLowerCase();
+      const clickedClass = String(clickedButtonOrIcon.className || '').toLowerCase();
+
+      if (
+        clickedText.includes('edit') ||
+        clickedClass.includes('edit') ||
+        rowText
+      ) {
+        activeEditRow = clickedRow;
+      }
+    }
 
     setTimeout(validateLiveClassForm, 100);
     setTimeout(validateLiveClassForm, 300);
@@ -619,12 +710,13 @@
     if (isSubmitLike) {
       validateLiveClassForm();
 
-      setTimeout(refreshTable, 1000);
+      setTimeout(updateActiveRowFromForm, 300);
+      setTimeout(updateActiveRowFromForm, 800);
+      setTimeout(refreshTable, 1200);
       setTimeout(refreshTable, 2500);
     }
   }, true);
 
-  // Detect internal route changes in CMS SPA
   let lastUrl = location.href;
 
   function watchRouteChange() {
