@@ -8,6 +8,7 @@
 // @match        *://www.cqchecker.shikho.com/*
 // @run-at       document-idle
 // @grant        none
+// @require      https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js
 // @updateURL    https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cq-pending-auto-scanner.user.js
 // @downloadURL  https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cq-pending-auto-scanner.user.js
 // ==/UserScript==
@@ -33,6 +34,15 @@
   let authHeader = "";
   let isReady = false;
   let stopScan = false;
+  
+  let latestScanRows = [];
+  let latestScanSummary = {
+    totalPending: 0,
+    scannedQuestions: 0,
+    pendingExams: 0,
+    errorCount: 0,
+    generatedAt: "",
+  };
 
   /************************************************************
    * GRAPHQL QUERIES
@@ -555,6 +565,21 @@
     const resultBox = document.querySelector("#cq-auto-results");
     if (!resultBox) return;
 
+    const pendingExams = rows.filter((row) => row.totalPending > 0).length;
+    const errorCount = rows.reduce(
+      (sum, row) => sum + row.questionRows.filter((q) => q.type === "error").length,
+      0
+    );
+    
+    latestScanRows = rows;
+    latestScanSummary = {
+      totalPending,
+      scannedQuestions,
+      pendingExams,
+      errorCount,
+      generatedAt: new Date().toLocaleString(),
+    };
+
     resultBox.innerHTML = `<div class="cq-auto-empty">Starting scan...</div>`;
 
     let exams = readStore(STORAGE.exams, []);
@@ -680,12 +705,7 @@
       ? rows.filter((row) => row.totalPending > 0 || row.questionRows.some((q) => q.type === "error"))
       : rows;
 
-    const pendingExams = rows.filter((row) => row.totalPending > 0).length;
-    const errorCount = rows.reduce(
-      (sum, row) => sum + row.questionRows.filter((q) => q.type === "error").length,
-      0
-    );
-
+   
     const summaryHtml = `
       <div class="cq-auto-summary">
         <div><span>Total Pending</span><strong>${totalPending}</strong></div>
@@ -812,44 +832,132 @@
   }
 
   function exportVisibleResults() {
-    const cards = Array.from(document.querySelectorAll(".cq-auto-exam"));
-
-    if (!cards.length) {
-      alert("No result to export yet.");
-      return;
-    }
-
-    const rows = [["Exam", "Meta", "Pending"]];
-
-    cards.forEach((card) => {
-      const title = card.querySelector(".cq-auto-exam-title")?.textContent || "";
-      const meta = Array.from(card.querySelectorAll(".cq-auto-meta"))
-        .map((m) => m.textContent.trim())
-        .join(" | ");
-      const pending = card.querySelector(".cq-auto-pending-count")?.textContent || "0";
-
-      rows.push([title, meta, pending]);
-    });
-
-    const csv = rows
-      .map((row) =>
-        row
-          .map((cell) => `"${String(cell || "").replaceAll('"', '""')}"`)
-          .join(",")
-      )
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cq-pending-scan-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
+  if (!latestScanRows.length) {
+    alert("No scan result found yet. Please run Scan Pending first.");
+    return;
   }
 
+  if (typeof XLSX === "undefined") {
+    alert("XLSX library not loaded. Please check the @require line in Tampermonkey header.");
+    return;
+  }
+
+  const hideZero = localStorage.getItem(STORAGE.hideZero) !== "false";
+
+  const rowsToExport = hideZero
+    ? latestScanRows.filter(
+        (row) =>
+          row.totalPending > 0 ||
+          row.questionRows.some((q) => q.type === "error")
+      )
+    : latestScanRows;
+
+  const summaryData = [
+    ["Generated At", latestScanSummary.generatedAt],
+    ["Total Pending", latestScanSummary.totalPending],
+    ["Pending Exams", latestScanSummary.pendingExams],
+    ["Questions Checked", latestScanSummary.scannedQuestions],
+    ["Errors", latestScanSummary.errorCount],
+  ];
+
+  const detailData = [
+    [
+      "Exam Title",
+      "Subject",
+      "Class",
+      "Group",
+      "Exam / Stage",
+      "Set",
+      "Question",
+      "Question Title / Preview",
+      "Pending Count",
+      "Status",
+    ],
+  ];
+
+  for (const row of rowsToExport) {
+    const exam = row.exam;
+
+    const pendingQuestions = row.questionRows.filter(
+      (item) => item.type === "question" && Number(item.count) > 0
+    );
+
+    const errorQuestions = row.questionRows.filter((item) => item.type === "error");
+
+    if (!pendingQuestions.length && !errorQuestions.length && !hideZero) {
+      detailData.push([
+        exam.model_test_title || "",
+        exam.subject || "",
+        exam.class || "",
+        exam.group || "",
+        exam.exam_title || "",
+        "",
+        "",
+        "",
+        0,
+        "No Pending",
+      ]);
+    }
+
+    for (const item of pendingQuestions) {
+      detailData.push([
+        exam.model_test_title || "",
+        exam.subject || "",
+        exam.class || "",
+        exam.group || "",
+        exam.exam_title || "",
+        item.setId || "",
+        item.question?.question_label || "",
+        item.question?.title_preview || "",
+        Number(item.count || 0),
+        "Pending",
+      ]);
+    }
+
+    for (const item of errorQuestions) {
+      detailData.push([
+        exam.model_test_title || "",
+        exam.subject || "",
+        exam.class || "",
+        exam.group || "",
+        exam.exam_title || "",
+        item.setId || "",
+        item.question?.question_label || "",
+        item.message || "",
+        "",
+        "Error",
+      ]);
+    }
+  }
+
+  const workbook = XLSX.utils.book_new();
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+  const detailSheet = XLSX.utils.aoa_to_sheet(detailData);
+
+  summarySheet["!cols"] = [{ wch: 24 }, { wch: 24 }];
+  detailSheet["!cols"] = [
+    { wch: 38 },
+    { wch: 18 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 8 },
+    { wch: 12 },
+    { wch: 55 },
+    { wch: 14 },
+    { wch: 14 },
+  ];
+
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+  XLSX.utils.book_append_sheet(workbook, detailSheet, "Pending Details");
+
+  const fileName = `cq-pending-details-${new Date()
+    .toISOString()
+    .slice(0, 10)}.xlsx`;
+
+  XLSX.writeFile(workbook, fileName);
+}
   /************************************************************
    * UI
    ************************************************************/
