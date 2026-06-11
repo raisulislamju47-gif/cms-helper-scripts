@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      4.10
-// @description  Improve CMS live class table, auto-update edited time, show teacher, and validate schedule
+// @version      5.0
+// @description  Improve CMS live class table, auto-update edited time, show teacher with Class Id, and validate schedule
 // @match        https://cms.shikho.com/*
 // @updateURL    https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cms-live-class-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cms-live-class-helper.user.js
@@ -13,18 +13,6 @@
   'use strict';
 
   let activeEditRow = null;
-
-  window.fetch = async function (...args) {
-  const response = await originalFetch.apply(this, args);
-  const clonedResponse = response.clone();
-
-  clonedResponse.json().then(data => {
-    // read live class list response
-    // save id, title, subject, start_time, end_time
-  });
-
-  return response;
-};
 
   function isLiveClassPage() {
     return window.location.pathname.includes('/live-classes-academic');
@@ -172,17 +160,149 @@
     headers.forEach((header, index) => {
       const text = cleanText(header.innerText).toLowerCase();
 
+      if (text.includes('class id')) indexes.classId = index;
       if (text === 'title') indexes.title = index;
       if (text.includes('subject')) indexes.subjectChapter = index;
       if (text.includes('class ongoing')) indexes.classOngoing = index;
       if (text.includes('start time')) indexes.startTime = index;
       if (text.includes('end time')) indexes.endTime = index;
-      if (text.includes('teacher') || text.includes('mentor')) indexes.teacher = index;
       if (text.includes('actions')) indexes.actions = index;
-      if (text.includes('class id')) indexes.classId = index;
     });
 
     return indexes;
+  }
+
+  function getAuthTokenFromStorage() {
+    const storageList = [localStorage, sessionStorage];
+
+    for (const storage of storageList) {
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        const value = storage.getItem(key) || '';
+
+        const match = value.match(/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/);
+
+        if (match) {
+          return match[0];
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function getTeacherCache() {
+    try {
+      return JSON.parse(localStorage.getItem('cmsTeacherCache') || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveTeacherCache(cache) {
+    localStorage.setItem('cmsTeacherCache', JSON.stringify(cache));
+  }
+
+  function getClassIdFromRow(row, indexes) {
+    const cells = Array.from(row.querySelectorAll('td'));
+
+    if (indexes.classId !== undefined && cells[indexes.classId]) {
+      return cleanText(cells[indexes.classId].innerText);
+    }
+
+    return '';
+  }
+
+  async function fetchTeacherNameByClassId(classId) {
+    if (!classId) return '';
+
+    const cache = getTeacherCache();
+
+    if (cache[classId]) {
+      return cache[classId];
+    }
+
+    const token = getAuthTokenFromStorage();
+
+    if (!token) {
+      console.warn('[CMS Helper] Auth token not found. Teacher name cannot be fetched.');
+      return '';
+    }
+
+    const query = `
+      query LiveClassAcademic($id: String!) {
+        academicProgramLiveClass(id: $id) {
+          id
+          teacher {
+            id
+            name
+          }
+        }
+      }
+    `;
+
+    try {
+      const response = await fetch('https://api.shikho.com/graphql', {
+        method: 'POST',
+        headers: {
+          accept: '*/*',
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+          'x-vendor': 'shikho'
+        },
+        body: JSON.stringify({
+          operationName: 'LiveClassAcademic',
+          variables: {
+            id: classId
+          },
+          query
+        })
+      });
+
+      const result = await response.json();
+
+      const teacherName =
+        result?.data?.academicProgramLiveClass?.teacher?.name || '';
+
+      if (teacherName) {
+        cache[classId] = teacherName;
+        saveTeacherCache(cache);
+      }
+
+      return teacherName;
+    } catch (error) {
+      console.warn('[CMS Helper] Failed to fetch teacher name:', error);
+      return '';
+    }
+  }
+
+  function getTeacherNameFromRow(row, cells, indexes) {
+    const classId = getClassIdFromRow(row, indexes);
+
+    if (classId) {
+      const cache = getTeacherCache();
+
+      if (cache[classId]) {
+        return cache[classId];
+      }
+
+      if (!row.dataset.teacherFetchStarted) {
+        row.dataset.teacherFetchStarted = 'true';
+
+        fetchTeacherNameByClassId(classId).then(teacherName => {
+          if (teacherName) {
+            row.dataset.teacherName = teacherName;
+            setTimeout(improveOriginalTable, 100);
+          }
+        });
+      }
+    }
+
+    if (row.dataset.teacherName) {
+      return row.dataset.teacherName;
+    }
+
+    return '-';
   }
 
   function styleTimeCell(cell, label, data, color, bgColor) {
@@ -364,139 +484,6 @@
     targetCell.appendChild(warning);
   }
 
-  function getTeacherNameFromRow(row, cells, indexes) {
-  const classId = getClassIdFromRow(row, indexes);
-
-  if (classId) {
-    const cache = getTeacherCache();
-
-    if (cache[classId]) {
-      return cache[classId];
-    }
-
-    if (!row.dataset.teacherFetchStarted) {
-      row.dataset.teacherFetchStarted = 'true';
-
-      fetchTeacherNameByClassId(classId).then(teacherName => {
-        if (teacherName) {
-          row.dataset.teacherName = teacherName;
-          setTimeout(improveOriginalTable, 100);
-        }
-      });
-    }
-  }
-
-  if (row.dataset.teacherName) {
-    return row.dataset.teacherName;
-  }
-
-  return '-';
-}
-  function getAuthTokenFromStorage() {
-  const storageList = [localStorage, sessionStorage];
-
-  for (const storage of storageList) {
-    for (let i = 0; i < storage.length; i++) {
-      const key = storage.key(i);
-      const value = storage.getItem(key) || '';
-
-      // Look for JWT-like token
-      const match = value.match(/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/);
-
-      if (match) {
-        return match[0];
-      }
-    }
-  }
-
-  return '';
-}
-
-function getTeacherCache() {
-  try {
-    return JSON.parse(localStorage.getItem('cmsTeacherCache') || '{}');
-  } catch (e) {
-    return {};
-  }
-}
-
-function saveTeacherCache(cache) {
-  localStorage.setItem('cmsTeacherCache', JSON.stringify(cache));
-}
-
-function getClassIdFromRow(row, indexes) {
-  const cells = Array.from(row.querySelectorAll('td'));
-
-  if (indexes.classId !== undefined && cells[indexes.classId]) {
-    return cleanText(cells[indexes.classId].innerText);
-  }
-
-  return '';
-}
-
-async function fetchTeacherNameByClassId(classId) {
-  if (!classId) return '';
-
-  const cache = getTeacherCache();
-
-  if (cache[classId]) {
-    return cache[classId];
-  }
-
-  const token = getAuthTokenFromStorage();
-
-  if (!token) {
-    console.warn('[CMS Helper] Auth token not found. Teacher name cannot be fetched.');
-    return '';
-  }
-
-  const query = `
-    query LiveClassAcademic($id: String!) {
-      academicProgramLiveClass(id: $id) {
-        id
-        teacher {
-          id
-          name
-        }
-      }
-    }
-  `;
-
-  try {
-    const response = await fetch('https://api.shikho.com/graphql', {
-      method: 'POST',
-      headers: {
-        'accept': '*/*',
-        'content-type': 'application/json',
-        'authorization': `Bearer ${token}`,
-        'x-vendor': 'shikho'
-      },
-      body: JSON.stringify({
-        operationName: 'LiveClassAcademic',
-        variables: {
-          id: classId
-        },
-        query
-      })
-    });
-
-    const result = await response.json();
-
-    const teacherName =
-      result?.data?.academicProgramLiveClass?.teacher?.name || '';
-
-    if (teacherName) {
-      cache[classId] = teacherName;
-      saveTeacherCache(cache);
-    }
-
-    return teacherName;
-  } catch (error) {
-    console.warn('[CMS Helper] Failed to fetch teacher name:', error);
-    return '';
-  }
-}
-  
   function improveOriginalTable() {
     if (!isLiveClassPage()) return;
 
@@ -529,7 +516,7 @@ async function fetchTeacherNameByClassId(classId) {
       const startCell = cells[indexes.startTime];
       const endCell = cells[indexes.endTime];
 
-      if (!startCell || !endCell) return;
+      if (!startCell || !endCell || !classOngoingCell) return;
 
       clearRowWarnings(row);
 
@@ -548,7 +535,7 @@ async function fetchTeacherNameByClassId(classId) {
       }
 
       const teacherName = getTeacherNameFromRow(row, cells, indexes);
-      
+
       styleTextCell(titleCell, 'title');
       styleTextCell(subjectCell, 'subject');
       styleClassOngoingCell(classOngoingCell, classOngoingText, teacherName);
@@ -815,17 +802,16 @@ async function fetchTeacherNameByClassId(classId) {
     if (!isLiveClassPage()) return;
 
     const clickedRow = event.target.closest('tr.ant-table-row');
-    const clickedButtonOrIcon = event.target.closest('button, a, span, svg');
+    const clickedElement = event.target.closest('button, a, span, svg');
 
-    if (clickedRow && clickedButtonOrIcon) {
-      const rowText = cleanText(clickedRow.innerText).toLowerCase();
-      const clickedText = cleanText(clickedButtonOrIcon.innerText).toLowerCase();
-      const clickedClass = String(clickedButtonOrIcon.className || '').toLowerCase();
+    if (clickedRow && clickedElement) {
+      const clickedClass = String(clickedElement.className || '').toLowerCase();
+      const clickedText = cleanText(clickedElement.innerText).toLowerCase();
 
       if (
-        clickedText.includes('edit') ||
         clickedClass.includes('edit') ||
-        rowText
+        clickedText.includes('edit') ||
+        clickedElement.querySelector?.('.anticon-edit')
       ) {
         activeEditRow = clickedRow;
       }
@@ -850,6 +836,7 @@ async function fetchTeacherNameByClassId(classId) {
 
       setTimeout(updateActiveRowFromForm, 300);
       setTimeout(updateActiveRowFromForm, 800);
+
       setTimeout(refreshTable, 1200);
       setTimeout(refreshTable, 2500);
     }
