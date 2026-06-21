@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CMS Live Class Table Cleaner + Live Form Validation
 // @namespace    shikho-cms-helper
-// @version      5.0
+// @version      5.1
 // @description  Improve CMS live class table, auto-update edited time, show teacher with Class Id, and validate schedule
 // @match        https://cms.shikho.com/*
 // @updateURL    https://raw.githubusercontent.com/raisulislamju47-gif/cms-helper-scripts/main/cms-live-class-helper.user.js
@@ -21,6 +21,107 @@
   function cleanText(value) {
     return (value || '').replace(/\s+/g, ' ').trim();
   }
+
+  function normalizeProgramName(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/[–—]/g, '-')
+    .replace(/\s*-\s*/g, ' - ');
+}
+
+const PROGRAM_DURATION_RULES = {
+  [normalizeProgramName("Class 6 - SSC '31")]: 60,
+  [normalizeProgramName("Class 7 - SSC '30")]: 60,
+  [normalizeProgramName("Class 8 - SSC '29")]: 60,
+
+  [normalizeProgramName("Class 9 - SSC '28 Science")]: 75,
+  [normalizeProgramName("Class 9 - SSC '28 Humanities")]: 75,
+  [normalizeProgramName("Class 9 - SSC '28 Business Studies")]: 75,
+
+  [normalizeProgramName("Class 10 - SSC '27 Science")]: 75,
+  [normalizeProgramName("Class 10 - SSC '27 Business Studies")]: 75,
+  [normalizeProgramName("Class 10 - SSC '27 Humanities")]: 75,
+
+  [normalizeProgramName("Class 11 - HSC '27 Science")]: 90,
+  [normalizeProgramName("Class 11 - HSC '27 Humanities (Full)")]: 90,
+  [normalizeProgramName("Class 11 - HSC '27 Humanities")]: 90,
+  [normalizeProgramName("Class 11 - HSC '27 Business Studies")]: 90,
+
+  [normalizeProgramName("HSC '27 - Pre-Medical")]: 150,
+
+  [normalizeProgramName(
+    "HSC '26 - Pre-Engineering, Engineering + DU A"
+  )]: 90
+};
+
+function getSelectedAcademicProgram() {
+  // Primary method: locate the Academic Program select through its input.
+  const programInput = document.querySelector(
+    'input[placeholder="Select Program"]'
+  );
+
+  if (programInput) {
+    const select = programInput.closest('.ant-select');
+
+    const selectedItem = select?.querySelector(
+      '.ant-select-selection-item'
+    );
+
+    const selectedValue =
+      selectedItem?.getAttribute('title') ||
+      selectedItem?.innerText ||
+      programInput.value;
+
+    if (cleanText(selectedValue)) {
+      return cleanText(selectedValue);
+    }
+  }
+
+  // Fallback method
+  const selectedItems = Array.from(
+    document.querySelectorAll('.ant-select-selection-item')
+  );
+
+  for (const selectedItem of selectedItems) {
+    let parent = selectedItem.parentElement;
+
+    for (let level = 0; level < 5 && parent; level++) {
+      const parentText = cleanText(parent.innerText).toLowerCase();
+
+      if (parentText.includes('academic program')) {
+        return cleanText(
+          selectedItem.getAttribute('title') ||
+          selectedItem.innerText
+        );
+      }
+
+      parent = parent.parentElement;
+    }
+  }
+
+  return '';
+}
+
+function formatDurationMinutes(totalMinutes) {
+  const minutes = Math.max(0, Math.round(totalMinutes));
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  const parts = [];
+
+  if (hours > 0) {
+    parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
+  }
+
+  if (remainingMinutes > 0) {
+    parts.push(
+      `${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`
+    );
+  }
+
+  return parts.length ? parts.join(' ') : '0 minutes';
+}
 
   function pad2(value) {
     return String(value).padStart(2, '0');
@@ -504,6 +605,13 @@
       return;
     }
 
+    const selectedAcademicProgram = getSelectedAcademicProgram();
+
+const requiredDurationMinutes =
+  PROGRAM_DURATION_RULES[
+    normalizeProgramName(selectedAcademicProgram)
+  ];
+
     const rows = Array.from(tableBody.querySelectorAll('tr.ant-table-row'));
 
     rows.forEach(row => {
@@ -559,6 +667,43 @@
       ) {
         addRowWarning(row, endCell, 'Start date and end date are different. Please verify if this is intentional.', 'warning');
       }
+
+      // Class duration validation based on selected Academic Program
+if (
+  requiredDurationMinutes &&
+  startData.dateTime &&
+  endData.dateTime &&
+  endData.dateTime > startData.dateTime
+) {
+  const actualDurationMinutes = Math.round(
+    (endData.dateTime.getTime() - startData.dateTime.getTime()) /
+    60000
+  );
+
+  if (actualDurationMinutes < requiredDurationMinutes) {
+    const shortage =
+      requiredDurationMinutes - actualDurationMinutes;
+
+    addRowWarning(
+      row,
+      endCell,
+      `Class duration warning: This class is ${formatDurationMinutes(shortage)} shorter than required. Expected: ${formatDurationMinutes(requiredDurationMinutes)}. Scheduled: ${formatDurationMinutes(actualDurationMinutes)}.`,
+      'warning'
+    );
+  }
+
+  if (actualDurationMinutes > requiredDurationMinutes) {
+    const excess =
+      actualDurationMinutes - requiredDurationMinutes;
+
+    addRowWarning(
+      row,
+      endCell,
+      `Class duration warning: This class exceeds the required duration by ${formatDurationMinutes(excess)}. Expected: ${formatDurationMinutes(requiredDurationMinutes)}. Scheduled: ${formatDurationMinutes(actualDurationMinutes)}.`,
+      'warning'
+    );
+  }
+}
 
       if (
         startData.dateTime &&
